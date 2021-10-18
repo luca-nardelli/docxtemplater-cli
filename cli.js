@@ -6,6 +6,7 @@ const fs = require("fs");
 const PizZip = require("pizzip");
 const Docxtemplater = require("docxtemplater");
 const expressions = require("angular-expressions");
+const csvtojson=require('csvtojson');
 
 function transformError(error) {
 	const e = {
@@ -44,6 +45,22 @@ function parser(tag) {
 	};
 }
 
+function render(doc,data,outputFile) {
+	doc.setData(data);
+
+	try {
+		doc.render();
+	} catch (error) {
+		printErrorAndRethrow();
+	}
+
+	const generated = doc
+		.getZip()
+		.generate({ type: "nodebuffer", compression: "DEFLATE" });
+
+	fs.writeFileSync(outputFile, generated);
+}
+
 const args = argv._;
 if (argv.help || args.length !== 3) {
 	showHelp();
@@ -58,29 +75,45 @@ if (argv.options) {
 	}
 }
 
-const [inputFile, dataFile, outputFile] = args;
-const input = fs.readFileSync(inputFile, "binary");
-const data = JSON.parse(fs.readFileSync(dataFile, "utf-8"));
 options.parser = parser;
 
-let doc;
+async function main() {
 
-try {
-	doc = new Docxtemplater(new PizZip(input), options);
-} catch (e) {
-	printErrorAndRethrow();
+	const [inputFile, dataFile, outputFile] = args;
+	const input = fs.readFileSync(inputFile, "binary");
+	let data;
+	if (dataFile.endsWith(".json")){
+		data = JSON.parse(fs.readFileSync(dataFile, "utf-8"));
+	} else if (dataFile.endsWith(".csv")){
+		data = await csvtojson({flatKeys: true}).fromFile(dataFile);
+	} else {
+		throw new Error(`Unsupported file format ${dataFile}`);
+	}
+
+
+	let doc;
+
+	try {
+		doc = new Docxtemplater(new PizZip(input), options);
+	} catch (e) {
+		printErrorAndRethrow(e);
+	}
+
+	if (Array.isArray(data)){
+		let i = 0;
+		for(const elem of data){
+			i++;
+			render(doc,elem,elem['_filename'] ?? outputFile.replace('.docx',`${i}.docx`));
+		}
+	} else {
+		render(doc,data,outputFile);
+	}
+
 }
 
-doc.setData(data);
+main()
+	.then(() => process.exit(0))
+	.catch(e => {console.error(e); process.exit(1);})
+;
 
-try {
-	doc.render();
-} catch (error) {
-	printErrorAndRethrow();
-}
 
-const generated = doc
-	.getZip()
-	.generate({ type: "nodebuffer", compression: "DEFLATE" });
-
-fs.writeFileSync(outputFile, generated);
